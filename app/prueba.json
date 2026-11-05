@@ -1,0 +1,33 @@
+{
+  "matricula": "20206615",
+  "base": "http://127.0.0.1:8000",
+  "coleccion": "/viajes",
+  "campo_id": "id",
+  "valido": {
+    "personas": 2,
+    "destino": "Guadalajara",
+    "presupuesto": 1500.50,
+    "fecha_salida": "2026-12-25",
+    "fecha_regreso": "2026-12-28",
+    "estado": "pendiente"
+  },
+  "invalido": {
+    "personas": 0,
+    "destino": "G",
+    "presupuesto": -10,
+    "fecha_salida": "navidad",
+    "fecha_regreso": "año nuevo",
+    "estado": "terminado"
+  },
+  "metodo_cambio": "PUT",
+  "cambio": {
+    "personas": 3,
+    "destino": "Guadalajara Centro",
+    "presupuesto": 1800.00,
+    "fecha_salida": "2026-12-25",
+    "fecha_regreso": "2026-12-29",
+    "estado": "en curso"
+  },
+  "id_inexistente": "999999",
+  "encabezados": {}
+}

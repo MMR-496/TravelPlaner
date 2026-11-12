@@ -191,7 +191,8 @@ def crear_tablas():
                 ("coco", "cocoloco", "encargado"),
                 ("pancho", "tamarindo123", "invitado"),
                 ("ana", "ana12345", "encargado"),
-                ("pedrita", "123tamatindo", "invitado")
+                ("pedrita", "123tamatindo", "invitado"),
+                ("lupe", "lupe12345", "invitado")
             ]
             for usuario, clave, rol in usuarios_prueba:
                 clave_hash = bcrypt.hashpw(clave.encode(), bcrypt.gensalt()).decode()

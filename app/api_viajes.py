@@ -65,10 +65,10 @@ class ActividadNueva(BaseModel):
     nombre: str = Field(..., min_length=2, max_length=50, examples=["Visitar la playa"])
     hora: str = Field(..., pattern=r"^\d{2}:\d{2}$", examples=["10:30"])
 
-
 class Actividad(ActividadNueva):
     id: int
     viaje_id: int
+    usuario: str
 
 
 class ErrorRespuesta(BaseModel):
@@ -160,6 +160,7 @@ def crear_tablas():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 viaje_id INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
+                usuario TEXT NOT NULL,
                 hora TEXT NOT NULL,
                 FOREIGN KEY (viaje_id) REFERENCES viajes (id) ON DELETE CASCADE
             )
@@ -189,7 +190,8 @@ def crear_tablas():
             usuarios_prueba = [
                 ("coco", "cocoloco", "encargado"),
                 ("pancho", "tamarindo123", "invitado"),
-                ("ana", "ana12345", "encargado")
+                ("ana", "ana12345", "encargado"),
+                ("pedrita", "123tamatindo", "invitado")
             ]
             for usuario, clave, rol in usuarios_prueba:
                 clave_hash = bcrypt.hashpw(clave.encode(), bcrypt.gensalt()).decode()
@@ -197,6 +199,14 @@ def crear_tablas():
                     "INSERT INTO usuarios (usuario, clave_hash, rol) VALUES (?, ?, ?)",
                     (usuario, clave_hash, rol),
                 )
+
+        cantidad_viajes = con.execute("SELECT COUNT(*) FROM viajes").fetchone()[0]
+        if cantidad_viajes == 0:
+            con.execute(
+                "INSERT INTO viajes (personas, destino, presupuesto, fecha_salida, fecha_regreso, estado) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (2, "Manzanillo", 3000.0, "2026-12-20", "2026-12-23", "pendiente"),
+            )  
         con.commit()
     finally:
         con.close()
@@ -248,15 +258,21 @@ def buscar_viaje(viaje_id: int):
     return filas[0]
 
 
-def buscar_actividad(viaje_id: int, actividad_id: int):
-    filas = consultar(
-        "SELECT * FROM actividades WHERE id = ? AND viaje_id = ?",
-        (actividad_id, viaje_id),
-    )
+def buscar_actividad(viaje_id: int, actividad_id: int, yo: dict):
+    if yo["rol"] == "encargado":
+        filas = consultar(
+            "SELECT * FROM actividades WHERE id = ? AND viaje_id = ?",
+            (actividad_id, viaje_id),
+        )
+    else:
+        filas = consultar(
+            "SELECT * FROM actividades WHERE id = ? AND viaje_id = ? AND usuario = ?",
+            (actividad_id, viaje_id, yo["usuario"]),
+        )
     if len(filas) == 0:
+        # 404 y no 403: no confirmamos que exista
         raise HTTPException(404, "No existe la actividad")
     return filas[0]
-
 
 # ============================================================
 # 4. AUTENTICACIÓN: ¿QUIÉN ERES?  (login -> token -> verificar el token en cada petición)
@@ -314,15 +330,14 @@ def quien_soy(yo: dict = Depends(usuario_actual)):
 # ============================================================
 
 
-@app.get("/viajes", response_model=list[Viaje], tags=["viajes"])
-def listar_viajes():
+@app.get("/viajes", response_model=list[Viaje], responses={**E401}, tags=["viajes"])
+def listar_viajes(yo: dict = Depends(usuario_actual)):
     return consultar("SELECT * FROM viajes")
 
 
-@app.get("/viajes/{viaje_id}", response_model=Viaje, responses={**E404, **E422}, tags=["viajes"])
-def consultar_viaje(viaje_id: int):
+@app.get("/viajes/{viaje_id}", response_model=Viaje, responses={**E401, **E404, **E422}, tags=["viajes"])
+def consultar_viaje(viaje_id: int, yo: dict = Depends(usuario_actual)):
     return buscar_viaje(viaje_id)
-
 
 @app.post(
     "/viajes",
@@ -450,65 +465,83 @@ def borrar_viaje(viaje_id: int, yo: dict = Depends(solo_encargado)):
 # 5. ENDPOINTS DE ACTIVIDADES
 # ============================================================
 
-
 @app.post(
     "/viajes/{viaje_id}/actividades",
     status_code=201,
     response_model=Actividad,
-    responses={**E400, **E404, **E422},
+    responses={**E400, **E401, **E404, **E422},
     tags=["actividades"],
 )
-def crear_actividad(viaje_id: int, datos: ActividadNueva, yo: dict = Depends(solo_encargado)):
+def crear_actividad(viaje_id: int, datos: ActividadNueva, response: Response, yo: dict = Depends(usuario_actual)):
     buscar_viaje(viaje_id)
     nuevo_id = ejecutar(
-        "INSERT INTO actividades (viaje_id, nombre, hora) VALUES (?, ?, ?)",
-        (viaje_id, datos.nombre, datos.hora),
+        "INSERT INTO actividades (viaje_id, usuario, nombre, hora) VALUES (?, ?, ?, ?)",
+        (viaje_id, yo["usuario"], datos.nombre, datos.hora),
     )
-    return buscar_actividad(viaje_id, nuevo_id)
+    response.headers["Location"] = f"/viajes/{viaje_id}/actividades/{nuevo_id}"
+    return buscar_actividad(viaje_id, nuevo_id, yo)
 
 
 @app.get(
     "/viajes/{viaje_id}/actividades",
     response_model=list[Actividad],
-    responses={**E404, **E422},
+    responses={**E401, **E404, **E422},
     tags=["actividades"],
 )
-def listar_actividades(viaje_id: int):
+def listar_actividades(viaje_id: int, yo: dict = Depends(usuario_actual)):
     buscar_viaje(viaje_id)
-    return consultar("SELECT * FROM actividades WHERE viaje_id = ?", (viaje_id,))
+    if yo["rol"] == "encargado":
+        return consultar(
+            "SELECT * FROM actividades WHERE viaje_id = ? ORDER BY id",
+            (viaje_id,),
+        )
+    return consultar(
+        "SELECT * FROM actividades WHERE viaje_id = ? AND usuario = ? ORDER BY id",
+        (viaje_id, yo["usuario"]),
+    )
+
+
+@app.get(
+    "/viajes/{viaje_id}/actividades/{actividad_id}",
+    response_model=Actividad,
+    responses={**E401, **E404, **E422},
+    tags=["actividades"],
+)
+def consultar_actividad(viaje_id: int, actividad_id: int, yo: dict = Depends(usuario_actual)):
+    buscar_viaje(viaje_id)
+    return buscar_actividad(viaje_id, actividad_id, yo)
 
 
 @app.patch(
     "/viajes/{viaje_id}/actividades/{actividad_id}",
     response_model=Actividad,
-    responses={**E400, **E404, **E422},
+    responses={**E400, **E401, **E404, **E422},
     tags=["actividades"],
 )
-def modificar_actividad(viaje_id: int, actividad_id: int, datos: ActividadNueva, yo: dict = Depends(solo_encargado)):
+def modificar_actividad(viaje_id: int, actividad_id: int, datos: ActividadNueva, yo: dict = Depends(usuario_actual)):
     buscar_viaje(viaje_id)
-    buscar_actividad(viaje_id, actividad_id)
+    buscar_actividad(viaje_id, actividad_id, yo)
     ejecutar(
         "UPDATE actividades SET nombre = ?, hora = ? WHERE id = ? AND viaje_id = ?",
         (datos.nombre, datos.hora, actividad_id, viaje_id),
     )
-    return buscar_actividad(viaje_id, actividad_id)
+    return buscar_actividad(viaje_id, actividad_id, yo)
 
 
 @app.delete(
     "/viajes/{viaje_id}/actividades/{actividad_id}",
     status_code=204,
-    responses={**E404, **E422},
+    responses={**E401, **E404, **E422},
     tags=["actividades"],
 )
-def borrar_actividad(viaje_id: int, actividad_id: int, yo: dict = Depends(solo_encargado)):
+def borrar_actividad(viaje_id: int, actividad_id: int, yo: dict = Depends(usuario_actual)):
     buscar_viaje(viaje_id)
-    buscar_actividad(viaje_id, actividad_id)
+    buscar_actividad(viaje_id, actividad_id, yo)
     ejecutar(
         "DELETE FROM actividades WHERE id = ? AND viaje_id = ?",
         (actividad_id, viaje_id),
     )
     return Response(status_code=204)
-
 
 # ============================================================
 # 6. DEMO: SIN VALIDACIÓN

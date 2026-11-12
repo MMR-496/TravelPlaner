@@ -12,12 +12,15 @@
 
 import json
 import sqlite3
-from datetime import date
+from datetime import datetime, timedelta, timezone, date
 from typing import Literal, Optional
 
-from fastapi import Body, FastAPI, HTTPException, Request, Response
+import bcrypt
+import jwt
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
 
 app = FastAPI(title="API de Viajes", version="3.0")
@@ -73,12 +76,24 @@ class ErrorRespuesta(BaseModel):
     error: str = Field(..., examples=["No existe el viaje 99"])
     detalles: list[str] = Field(default=[], examples=[[]])
 
+class Credenciales(BaseModel):
+    usuario: str = Field(..., examples=["ana"])
+    clave: str = Field(..., max_length=72, examples=["ana12345"])   # bcrypt usa hasta 72 bytes
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expira_en_segundos: int
+
 
 # Errores que se muestran en el contrato (/docs)
 E400 = {400: {"model": ErrorRespuesta, "description": "El cuerpo no es un JSON válido"}}
 E404 = {404: {"model": ErrorRespuesta, "description": "No existe el recurso"}}
 E409 = {409: {"model": ErrorRespuesta, "description": "Ya existe un viaje al mismo destino en esa fecha"}}
 E422 = {422: {"model": ErrorRespuesta, "description": "Los datos no son válidos"}}
+E401 = {401: {"model": ErrorRespuesta, "description": "Falta el token, es falso o ya expiró"}}
+E403 = {403: {"model": ErrorRespuesta, "description": "Tu rol no tiene permiso para esta operación"}}
 
 # ============================================================
 # 2. BASE DE DATOS (SQLite)
@@ -86,6 +101,8 @@ E422 = {422: {"model": ErrorRespuesta, "description": "Los datos no son válidos
 
 ARCHIVO_BD = "viajes.db"
 
+SECRETO = "clave-no-tan-secreta-123-tamarindo"
+MINUTOS_TOKEN = 30
 
 def conectar():
     con = sqlite3.connect(ARCHIVO_BD)
@@ -148,6 +165,16 @@ def crear_tablas():
             )
             """
         )
+
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS usuarios (
+                    usuario TEXT PRIMARY KEY,
+                    clave_hash TEXT NOT NULL,
+                    rol TEXT NOT NULL)
+            """
+        )
+
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS sin_validar (
@@ -218,7 +245,58 @@ def buscar_actividad(viaje_id: int, actividad_id: int):
 
 
 # ============================================================
-# 4. CRUD DE VIAJES
+# 4. AUTENTICACIÓN: ¿QUIÉN ERES?  (login -> token -> verificar el token en cada petición)
+# ============================================================
+
+@app.post("/login", response_model=Token, responses=E401,
+          tags=["sesión"], summary="Entrar: cambia usuario y clave por un token")
+def login(c: Credenciales):
+    with conectar() as con:
+        fila = con.execute("SELECT * FROM usuarios WHERE usuario = ?", (c.usuario,)).fetchone()
+    # Mismo mensaje si no existe el usuario o si la clave está mal: no le digas al atacante cuál falló
+    if fila is None or not bcrypt.checkpw(c.clave.encode(), fila["clave_hash"].encode()):
+        raise HTTPException(401, "Usuario o clave incorrectos")
+    ahora = datetime.now(timezone.utc)
+    datos = {"sub": fila["usuario"], "rol": fila["rol"],           # lo que el token "dice" de ti
+             "iat": ahora, "exp": ahora + timedelta(minutes=MINUTOS_TOKEN)}
+    token = jwt.encode(datos, SECRETO, algorithm="HS256")          # firmado con la clave del servidor
+    return {"access_token": token, "token_type": "bearer", "expira_en_segundos": MINUTOS_TOKEN * 60}
+
+
+bearer = HTTPBearer(auto_error=False)   # lee el encabezado  Authorization: Bearer <token>
+SIN_SESION = {"WWW-Authenticate": "Bearer"}
+
+
+def usuario_actual(cred: HTTPAuthorizationCredentials = Depends(bearer)) -> dict:
+    if cred is None:
+        raise HTTPException(401, "Falta el token: inicia sesión en POST /login", headers=SIN_SESION)
+    try:
+        datos = jwt.decode(cred.credentials, SECRETO, algorithms=["HS256"])   # revisa firma y expiración
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "El token ya expiró: inicia sesión otra vez", headers=SIN_SESION)
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "El token no es válido (¿lo modificaste?)", headers=SIN_SESION)
+    return {"usuario": datos["sub"], "rol": datos["rol"]}
+
+
+# ============================================================
+# 5. AUTORIZACIÓN: ¿QUÉ PUEDES HACER?  (rol -> 403)
+# ============================================================
+
+def solo_encargado(yo: dict = Depends(usuario_actual)) -> dict:
+    if yo["rol"] != "encargado":
+        raise HTTPException(403, f"Tu rol ({yo['rol']}) no puede hacer esto: solo el encargado")
+    return yo
+
+
+@app.get("/yo", tags=["sesión"], responses=E401, summary="¿Quién dice el token que soy?")
+def quien_soy(yo: dict = Depends(usuario_actual)):
+    return yo
+
+
+
+# ============================================================
+# 6. CRUD DE VIAJES
 # ============================================================
 
 
@@ -239,7 +317,7 @@ def consultar_viaje(viaje_id: int):
     responses={**E400, **E409, **E422},
     tags=["viajes"],
 )
-def crear_viaje(datos: ViajeNuevo, response: Response):
+def crear_viaje(datos: ViajeNuevo, response: Response, yo: dict = Depends(solo_encargado)):
     try:
         nuevo_id = ejecutar(
             "INSERT INTO viajes (personas, destino, presupuesto, fecha_salida, fecha_regreso, estado) "
@@ -269,7 +347,7 @@ def crear_viaje(datos: ViajeNuevo, response: Response):
     responses={**E400, **E404, **E409, **E422},
     tags=["viajes"],
 )
-def reemplazar_viaje(viaje_id: int, datos: ViajeNuevo):
+def reemplazar_viaje(viaje_id: int, datos: ViajeNuevo, yo: dict = Depends(solo_encargado)):
     buscar_viaje(viaje_id)
 
     try:
@@ -300,7 +378,7 @@ def reemplazar_viaje(viaje_id: int, datos: ViajeNuevo):
     responses={**E400, **E404, **E409, **E422},
     tags=["viajes"],
 )
-def modificar_viaje(viaje_id: int, cambios: ViajeCambios):
+def modificar_viaje(viaje_id: int, cambios: ViajeCambios, yo: dict = Depends(solo_encargado)):
     viaje = buscar_viaje(viaje_id)
 
     # Solo los campos que el cliente mandó
@@ -347,7 +425,7 @@ def modificar_viaje(viaje_id: int, cambios: ViajeCambios):
     responses={**E404, **E422},
     tags=["viajes"],
 )
-def borrar_viaje(viaje_id: int):
+def borrar_viaje(viaje_id: int, yo: dict = Depends(solo_encargado)):
     buscar_viaje(viaje_id)
     # Sus actividades se borran solas (ON DELETE CASCADE)
     ejecutar("DELETE FROM viajes WHERE id = ?", (viaje_id,))
@@ -366,7 +444,7 @@ def borrar_viaje(viaje_id: int):
     responses={**E400, **E404, **E422},
     tags=["actividades"],
 )
-def crear_actividad(viaje_id: int, datos: ActividadNueva):
+def crear_actividad(viaje_id: int, datos: ActividadNueva, yo: dict = Depends(solo_encargado)):
     buscar_viaje(viaje_id)
     nuevo_id = ejecutar(
         "INSERT INTO actividades (viaje_id, nombre, hora) VALUES (?, ?, ?)",
@@ -392,7 +470,7 @@ def listar_actividades(viaje_id: int):
     responses={**E400, **E404, **E422},
     tags=["actividades"],
 )
-def modificar_actividad(viaje_id: int, actividad_id: int, datos: ActividadNueva):
+def modificar_actividad(viaje_id: int, actividad_id: int, datos: ActividadNueva, yo: dict = Depends(solo_encargado)):
     buscar_viaje(viaje_id)
     buscar_actividad(viaje_id, actividad_id)
     ejecutar(
@@ -408,7 +486,7 @@ def modificar_actividad(viaje_id: int, actividad_id: int, datos: ActividadNueva)
     responses={**E404, **E422},
     tags=["actividades"],
 )
-def borrar_actividad(viaje_id: int, actividad_id: int):
+def borrar_actividad(viaje_id: int, actividad_id: int, yo: dict = Depends(solo_encargado)):
     buscar_viaje(viaje_id)
     buscar_actividad(viaje_id, actividad_id)
     ejecutar(

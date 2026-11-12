@@ -183,6 +183,20 @@ def crear_tablas():
             )
             """
         )
+        #Se crean usuarios de prueba
+        cantidad = con.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+        if cantidad == 0:
+            usuarios_prueba = [
+                ("coco", "cocoloco", "encargado"),
+                ("pancho", "tamarindo123", "invitado"),
+                ("ana", "ana12345", "encargado")
+            ]
+            for usuario, clave, rol in usuarios_prueba:
+                clave_hash = bcrypt.hashpw(clave.encode(), bcrypt.gensalt()).decode()
+                con.execute(
+                    "INSERT INTO usuarios (usuario, clave_hash, rol) VALUES (?, ?, ?)",
+                    (usuario, clave_hash, rol),
+                )
         con.commit()
     finally:
         con.close()

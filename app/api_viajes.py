@@ -12,12 +12,15 @@
 
 import json
 import sqlite3
-from datetime import date
+from datetime import datetime, timedelta, timezone, date
 from typing import Literal, Optional
 
-from fastapi import Body, FastAPI, HTTPException, Request, Response
+import bcrypt
+import jwt
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
 
 app = FastAPI(title="API de Viajes", version="3.0")
@@ -62,10 +65,10 @@ class ActividadNueva(BaseModel):
     nombre: str = Field(..., min_length=2, max_length=50, examples=["Visitar la playa"])
     hora: str = Field(..., pattern=r"^\d{2}:\d{2}$", examples=["10:30"])
 
-
 class Actividad(ActividadNueva):
     id: int
     viaje_id: int
+    usuario: str
 
 
 class ErrorRespuesta(BaseModel):
@@ -73,12 +76,24 @@ class ErrorRespuesta(BaseModel):
     error: str = Field(..., examples=["No existe el viaje 99"])
     detalles: list[str] = Field(default=[], examples=[[]])
 
+class Credenciales(BaseModel):
+    usuario: str = Field(..., examples=["ana"])
+    clave: str = Field(..., max_length=72, examples=["ana12345"])   # bcrypt usa hasta 72 bytes
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expira_en_segundos: int
+
 
 # Errores que se muestran en el contrato (/docs)
 E400 = {400: {"model": ErrorRespuesta, "description": "El cuerpo no es un JSON válido"}}
 E404 = {404: {"model": ErrorRespuesta, "description": "No existe el recurso"}}
 E409 = {409: {"model": ErrorRespuesta, "description": "Ya existe un viaje al mismo destino en esa fecha"}}
 E422 = {422: {"model": ErrorRespuesta, "description": "Los datos no son válidos"}}
+E401 = {401: {"model": ErrorRespuesta, "description": "Falta el token, es falso o ya expiró"}}
+E403 = {403: {"model": ErrorRespuesta, "description": "Tu rol no tiene permiso para esta operación"}}
 
 # ============================================================
 # 2. BASE DE DATOS (SQLite)
@@ -86,6 +101,8 @@ E422 = {422: {"model": ErrorRespuesta, "description": "Los datos no son válidos
 
 ARCHIVO_BD = "viajes.db"
 
+SECRETO = "clave-no-tan-secreta-123-tamarindo"
+MINUTOS_TOKEN = 30
 
 def conectar():
     con = sqlite3.connect(ARCHIVO_BD)
@@ -143,11 +160,22 @@ def crear_tablas():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 viaje_id INTEGER NOT NULL,
                 nombre TEXT NOT NULL,
+                usuario TEXT NOT NULL,
                 hora TEXT NOT NULL,
                 FOREIGN KEY (viaje_id) REFERENCES viajes (id) ON DELETE CASCADE
             )
             """
         )
+
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS usuarios (
+                    usuario TEXT PRIMARY KEY,
+                    clave_hash TEXT NOT NULL,
+                    rol TEXT NOT NULL)
+            """
+        )
+
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS sin_validar (
@@ -156,6 +184,30 @@ def crear_tablas():
             )
             """
         )
+        #Se crean usuarios de prueba
+        cantidad = con.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+        if cantidad == 0:
+            usuarios_prueba = [
+                ("coco", "cocoloco", "encargado"),
+                ("pancho", "tamarindo123", "invitado"),
+                ("ana", "ana12345", "encargado"),
+                ("pedrita", "123tamatindo", "invitado"),
+                ("lupe", "lupe12345", "invitado")
+            ]
+            for usuario, clave, rol in usuarios_prueba:
+                clave_hash = bcrypt.hashpw(clave.encode(), bcrypt.gensalt()).decode()
+                con.execute(
+                    "INSERT INTO usuarios (usuario, clave_hash, rol) VALUES (?, ?, ?)",
+                    (usuario, clave_hash, rol),
+                )
+
+        cantidad_viajes = con.execute("SELECT COUNT(*) FROM viajes").fetchone()[0]
+        if cantidad_viajes == 0:
+            con.execute(
+                "INSERT INTO viajes (personas, destino, presupuesto, fecha_salida, fecha_regreso, estado) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (2, "Manzanillo", 3000.0, "2026-12-20", "2026-12-23", "pendiente"),
+            )  
         con.commit()
     finally:
         con.close()
@@ -207,30 +259,86 @@ def buscar_viaje(viaje_id: int):
     return filas[0]
 
 
-def buscar_actividad(viaje_id: int, actividad_id: int):
-    filas = consultar(
-        "SELECT * FROM actividades WHERE id = ? AND viaje_id = ?",
-        (actividad_id, viaje_id),
-    )
+def buscar_actividad(viaje_id: int, actividad_id: int, yo: dict):
+    if yo["rol"] == "encargado":
+        filas = consultar(
+            "SELECT * FROM actividades WHERE id = ? AND viaje_id = ?",
+            (actividad_id, viaje_id),
+        )
+    else:
+        filas = consultar(
+            "SELECT * FROM actividades WHERE id = ? AND viaje_id = ? AND usuario = ?",
+            (actividad_id, viaje_id, yo["usuario"]),
+        )
     if len(filas) == 0:
+        # 404 y no 403: no confirmamos que exista
         raise HTTPException(404, "No existe la actividad")
     return filas[0]
 
+# ============================================================
+# 4. AUTENTICACIÓN: ¿QUIÉN ERES?  (login -> token -> verificar el token en cada petición)
+# ============================================================
+
+@app.post("/login", response_model=Token, responses=E401,
+          tags=["sesión"], summary="Entrar: cambia usuario y clave por un token")
+def login(c: Credenciales):
+    with conectar() as con:
+        fila = con.execute("SELECT * FROM usuarios WHERE usuario = ?", (c.usuario,)).fetchone()
+    # Mismo mensaje si no existe el usuario o si la clave está mal: no le digas al atacante cuál falló
+    if fila is None or not bcrypt.checkpw(c.clave.encode(), fila["clave_hash"].encode()):
+        raise HTTPException(401, "Usuario o clave incorrectos")
+    ahora = datetime.now(timezone.utc)
+    datos = {"sub": fila["usuario"], "rol": fila["rol"],           # lo que el token "dice" de ti
+             "iat": ahora, "exp": ahora + timedelta(minutes=MINUTOS_TOKEN)}
+    token = jwt.encode(datos, SECRETO, algorithm="HS256")          # firmado con la clave del servidor
+    return {"access_token": token, "token_type": "bearer", "expira_en_segundos": MINUTOS_TOKEN * 60}
+
+
+bearer = HTTPBearer(auto_error=False)   # lee el encabezado  Authorization: Bearer <token>
+SIN_SESION = {"WWW-Authenticate": "Bearer"}
+
+
+def usuario_actual(cred: HTTPAuthorizationCredentials = Depends(bearer)) -> dict:
+    if cred is None:
+        raise HTTPException(401, "Falta el token: inicia sesión en POST /login", headers=SIN_SESION)
+    try:
+        datos = jwt.decode(cred.credentials, SECRETO, algorithms=["HS256"])   # revisa firma y expiración
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "El token ya expiró: inicia sesión otra vez", headers=SIN_SESION)
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "El token no es válido (¿lo modificaste?)", headers=SIN_SESION)
+    return {"usuario": datos["sub"], "rol": datos["rol"]}
+
 
 # ============================================================
-# 4. CRUD DE VIAJES
+# 5. AUTORIZACIÓN: ¿QUÉ PUEDES HACER?  (rol -> 403)
+# ============================================================
+
+def solo_encargado(yo: dict = Depends(usuario_actual)) -> dict:
+    if yo["rol"] != "encargado":
+        raise HTTPException(403, f"Tu rol ({yo['rol']}) no puede hacer esto: solo el encargado")
+    return yo
+
+
+@app.get("/yo", tags=["sesión"], responses=E401, summary="¿Quién dice el token que soy?")
+def quien_soy(yo: dict = Depends(usuario_actual)):
+    return yo
+
+
+
+# ============================================================
+# 6. CRUD DE VIAJES
 # ============================================================
 
 
-@app.get("/viajes", response_model=list[Viaje], tags=["viajes"])
-def listar_viajes():
+@app.get("/viajes", response_model=list[Viaje], responses={**E401}, tags=["viajes"])
+def listar_viajes(yo: dict = Depends(usuario_actual)):
     return consultar("SELECT * FROM viajes")
 
 
-@app.get("/viajes/{viaje_id}", response_model=Viaje, responses={**E404, **E422}, tags=["viajes"])
-def consultar_viaje(viaje_id: int):
+@app.get("/viajes/{viaje_id}", response_model=Viaje, responses={**E401, **E404, **E422}, tags=["viajes"])
+def consultar_viaje(viaje_id: int, yo: dict = Depends(usuario_actual)):
     return buscar_viaje(viaje_id)
-
 
 @app.post(
     "/viajes",
@@ -239,7 +347,7 @@ def consultar_viaje(viaje_id: int):
     responses={**E400, **E409, **E422},
     tags=["viajes"],
 )
-def crear_viaje(datos: ViajeNuevo, response: Response):
+def crear_viaje(datos: ViajeNuevo, response: Response, yo: dict = Depends(solo_encargado)):
     try:
         nuevo_id = ejecutar(
             "INSERT INTO viajes (personas, destino, presupuesto, fecha_salida, fecha_regreso, estado) "
@@ -269,7 +377,7 @@ def crear_viaje(datos: ViajeNuevo, response: Response):
     responses={**E400, **E404, **E409, **E422},
     tags=["viajes"],
 )
-def reemplazar_viaje(viaje_id: int, datos: ViajeNuevo):
+def reemplazar_viaje(viaje_id: int, datos: ViajeNuevo, yo: dict = Depends(solo_encargado)):
     buscar_viaje(viaje_id)
 
     try:
@@ -300,7 +408,7 @@ def reemplazar_viaje(viaje_id: int, datos: ViajeNuevo):
     responses={**E400, **E404, **E409, **E422},
     tags=["viajes"],
 )
-def modificar_viaje(viaje_id: int, cambios: ViajeCambios):
+def modificar_viaje(viaje_id: int, cambios: ViajeCambios, yo: dict = Depends(solo_encargado)):
     viaje = buscar_viaje(viaje_id)
 
     # Solo los campos que el cliente mandó
@@ -347,7 +455,7 @@ def modificar_viaje(viaje_id: int, cambios: ViajeCambios):
     responses={**E404, **E422},
     tags=["viajes"],
 )
-def borrar_viaje(viaje_id: int):
+def borrar_viaje(viaje_id: int, yo: dict = Depends(solo_encargado)):
     buscar_viaje(viaje_id)
     # Sus actividades se borran solas (ON DELETE CASCADE)
     ejecutar("DELETE FROM viajes WHERE id = ?", (viaje_id,))
@@ -358,65 +466,83 @@ def borrar_viaje(viaje_id: int):
 # 5. ENDPOINTS DE ACTIVIDADES
 # ============================================================
 
-
 @app.post(
     "/viajes/{viaje_id}/actividades",
     status_code=201,
     response_model=Actividad,
-    responses={**E400, **E404, **E422},
+    responses={**E400, **E401, **E404, **E422},
     tags=["actividades"],
 )
-def crear_actividad(viaje_id: int, datos: ActividadNueva):
+def crear_actividad(viaje_id: int, datos: ActividadNueva, response: Response, yo: dict = Depends(usuario_actual)):
     buscar_viaje(viaje_id)
     nuevo_id = ejecutar(
-        "INSERT INTO actividades (viaje_id, nombre, hora) VALUES (?, ?, ?)",
-        (viaje_id, datos.nombre, datos.hora),
+        "INSERT INTO actividades (viaje_id, usuario, nombre, hora) VALUES (?, ?, ?, ?)",
+        (viaje_id, yo["usuario"], datos.nombre, datos.hora),
     )
-    return buscar_actividad(viaje_id, nuevo_id)
+    response.headers["Location"] = f"/viajes/{viaje_id}/actividades/{nuevo_id}"
+    return buscar_actividad(viaje_id, nuevo_id, yo)
 
 
 @app.get(
     "/viajes/{viaje_id}/actividades",
     response_model=list[Actividad],
-    responses={**E404, **E422},
+    responses={**E401, **E404, **E422},
     tags=["actividades"],
 )
-def listar_actividades(viaje_id: int):
+def listar_actividades(viaje_id: int, yo: dict = Depends(usuario_actual)):
     buscar_viaje(viaje_id)
-    return consultar("SELECT * FROM actividades WHERE viaje_id = ?", (viaje_id,))
+    if yo["rol"] == "encargado":
+        return consultar(
+            "SELECT * FROM actividades WHERE viaje_id = ? ORDER BY id",
+            (viaje_id,),
+        )
+    return consultar(
+        "SELECT * FROM actividades WHERE viaje_id = ? AND usuario = ? ORDER BY id",
+        (viaje_id, yo["usuario"]),
+    )
+
+
+@app.get(
+    "/viajes/{viaje_id}/actividades/{actividad_id}",
+    response_model=Actividad,
+    responses={**E401, **E404, **E422},
+    tags=["actividades"],
+)
+def consultar_actividad(viaje_id: int, actividad_id: int, yo: dict = Depends(usuario_actual)):
+    buscar_viaje(viaje_id)
+    return buscar_actividad(viaje_id, actividad_id, yo)
 
 
 @app.patch(
     "/viajes/{viaje_id}/actividades/{actividad_id}",
     response_model=Actividad,
-    responses={**E400, **E404, **E422},
+    responses={**E400, **E401, **E404, **E422},
     tags=["actividades"],
 )
-def modificar_actividad(viaje_id: int, actividad_id: int, datos: ActividadNueva):
+def modificar_actividad(viaje_id: int, actividad_id: int, datos: ActividadNueva, yo: dict = Depends(usuario_actual)):
     buscar_viaje(viaje_id)
-    buscar_actividad(viaje_id, actividad_id)
+    buscar_actividad(viaje_id, actividad_id, yo)
     ejecutar(
         "UPDATE actividades SET nombre = ?, hora = ? WHERE id = ? AND viaje_id = ?",
         (datos.nombre, datos.hora, actividad_id, viaje_id),
     )
-    return buscar_actividad(viaje_id, actividad_id)
+    return buscar_actividad(viaje_id, actividad_id, yo)
 
 
 @app.delete(
     "/viajes/{viaje_id}/actividades/{actividad_id}",
     status_code=204,
-    responses={**E404, **E422},
+    responses={**E401, **E404, **E422},
     tags=["actividades"],
 )
-def borrar_actividad(viaje_id: int, actividad_id: int):
+def borrar_actividad(viaje_id: int, actividad_id: int, yo: dict = Depends(usuario_actual)):
     buscar_viaje(viaje_id)
-    buscar_actividad(viaje_id, actividad_id)
+    buscar_actividad(viaje_id, actividad_id, yo)
     ejecutar(
         "DELETE FROM actividades WHERE id = ? AND viaje_id = ?",
         (actividad_id, viaje_id),
     )
     return Response(status_code=204)
-
 
 # ============================================================
 # 6. DEMO: SIN VALIDACIÓN

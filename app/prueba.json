@@ -29,5 +29,19 @@
     "estado": "en curso"
   },
   "id_inexistente": "999999",
-  "encabezados": {}
+  "encabezados": {},
+  "openapi": "/openapi.json",
+  "auth": {
+    "login": "/login",
+    "campo_token": "access_token",
+    "admin":   {"usuario": "coco",   "clave": "cocoloco"},
+    "usuario": {"usuario": "pancho", "clave": "tamarindo123"},
+    "otro":    {"usuario": "lupe",   "clave": "lupe12345"}
+  },
+  "propio": {
+    "coleccion": "/viajes/1/actividades",
+    "valido": {"nombre": "Visitar la playa", "hora": "10:30"}
+  }
+
+
 }

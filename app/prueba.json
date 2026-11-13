@@ -41,7 +41,11 @@
   "propio": {
     "coleccion": "/viajes/1/actividades",
     "valido": {"nombre": "Visitar la playa", "hora": "10:30"}
+  },
+  "externo": {
+    "metodo": "POST",
+    "ruta": "/viajes/sugerencia",
+    "cuerpo": {"destino": "Comala, Colima"},
+    "token": "admin"
   }
-
-
 }

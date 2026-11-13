@@ -11,6 +11,9 @@
 # Regla de oro: toda consulta lleva parámetros (?), nunca texto pegado.
 
 import json
+import os
+import urllib.request
+import urllib.error
 import sqlite3
 from datetime import datetime, timedelta, timezone, date
 from typing import Literal, Optional
@@ -23,7 +26,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
 
-app = FastAPI(title="API de Viajes", version="3.0")
+app = FastAPI(title="API de Viajes", version="5.0")
 
 # ============================================================
 # 1. MODELOS Y VALIDACIONES
@@ -214,6 +217,59 @@ def crear_tablas():
 
 
 crear_tablas()
+
+# --- CONFIGURACIÓN DE LA IA ---
+IA_URL = os.environ.get("EXTERNO_URL", "https://generativelanguage.googleapis.com").rstrip("/")
+IA_MODELO = os.environ.get("GEMINI_MODELO", "gemini-flash-lite-latest")
+IA_CLAVE = os.environ.get("GEMINI_API_KEY", "")
+
+def preguntar_a_la_ia(instruccion: str) -> dict:
+    """Le pregunta a Gemini y regresa el JSON. Protege la API de caídas y reintenta si falla temporalmente."""
+    if not IA_CLAVE and "googleapis.com" in IA_URL:
+        raise HTTPException(503, "Falta configurar la variable de entorno GEMINI_API_KEY")
+    
+    cuerpo = {
+        "contents": [{"parts": [{"text": instruccion}]}],
+        "generationConfig": {"responseMimeType": "application/json", "temperature": 0}
+    }
+    
+    # Intentaremos hasta 2 veces (el original + 1 reintento)
+    max_intentos = 2 
+    
+    for intento in range(max_intentos):
+        req = urllib.request.Request(
+            f"{IA_URL}/v1beta/models/{IA_MODELO}:generateContent",
+            data=json.dumps(cuerpo).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json", "x-goog-api-key": IA_CLAVE}
+        )
+        
+        try:
+            # EL TIMEOUT: máximo 5 segundos esperando a Google
+            with urllib.request.urlopen(req, timeout=5) as r:
+                respuesta = json.loads(r.read())
+            return json.loads(respuesta["candidates"][0]["content"]["parts"][0]["text"])
+        
+        except TimeoutError:
+            # Si hay timeout, NO reintentamos, ya perdimos mucho tiempo.
+            raise HTTPException(504, "La IA tardó demasiado en responder. Intenta en un momento.")
+            
+        except urllib.error.HTTPError as e:
+            # Si es un error del servidor (500-599), hay oportunidad de reintentar
+            if 500 <= e.code < 600 and intento < (max_intentos - 1):
+                continue # Salta al siguiente intento del bucle
+            # Si es un 400 (error del cliente) o ya nos quedamos sin intentos, nos rendimos
+            raise HTTPException(502, f"La IA no está disponible (respondió {e.code}). Intenta más tarde.")
+            
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, TimeoutError):
+                raise HTTPException(504, "La IA tardó demasiado en responder.")
+            if intento < (max_intentos - 1):
+                continue
+            raise HTTPException(502, "No se pudo conectar con la IA.")
+            
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise HTTPException(502, "La IA respondió algo que no entendemos.")
 
 # ============================================================
 # 3. MANEJO DE ERRORES UNIFICADO
@@ -563,3 +619,32 @@ def listar_sin_validar():
     for fila in filas:
         resultado.append(json.loads(fila["datos"]))
     return resultado
+
+# --- ENDPOINT DE SUGERENCIA CON IA ---
+from pydantic import BaseModel, Field
+
+INSTRUCCION_IA = (
+    "Eres un agente de viajes en México. Para el destino que te doy, "
+    "responde SOLO un JSON con la forma "
+    '{"tipo": "playa" | "ciudad" | "naturaleza" | "pueblo", '
+    '"sugerencia": "una actividad recomendada, máximo 20 palabras en español"}.\n'
+    "Destino: "
+)
+
+class EntradaViajeSugerencia(BaseModel):
+    destino: str = Field(..., min_length=2, max_length=300, examples=["Comala, Colima"])
+
+@app.post("/viajes/sugerencia", tags=["IA"])
+def viajes_sugerencia(datos: EntradaViajeSugerencia, yo: dict = Depends(usuario_actual)):
+    # 1. Mandamos el destino a la IA
+    ia = preguntar_a_la_ia(INSTRUCCION_IA + datos.destino)
+    
+    # 2. NUNCA confíes en la IA: validamos que de verdad devolvió lo que pedimos
+    if not isinstance(ia, dict) or ia.get("tipo") not in ("playa", "ciudad", "naturaleza", "pueblo"):
+        raise HTTPException(502, "La IA respondió algo inesperado.")
+        
+    # 3. Regresamos la respuesta limpia
+    return {
+        "tipo": ia["tipo"],
+        "sugerencia": str(ia.get("sugerencia", ""))[:200]
+    }

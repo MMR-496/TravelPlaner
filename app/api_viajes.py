@@ -26,7 +26,19 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
 
-app = FastAPI(title="API de Viajes", version="5.0")
+app = FastAPI(title="API de Viajes", version="6.0")
+# ---------- CORS: qué páginas pueden usar su API desde el navegador ----------
+import os
+from fastapi.middleware.cors import CORSMiddleware
+
+ORIGENES = os.environ.get("CORS_ORIGENES", "http://127.0.0.1:5500,http://localhost:5500").split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ORIGENES,                           # una lista, nunca ["*"]
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],  # sin Authorization, el token no pasa la pregunta previa
+)
 
 # ============================================================
 # 1. MODELOS Y VALIDACIONES
@@ -245,8 +257,9 @@ def preguntar_a_la_ia(instruccion: str) -> dict:
         )
         
         try:
-            # EL TIMEOUT: máximo 5 segundos esperando a Google
-            with urllib.request.urlopen(req, timeout=5) as r:
+            # EL TIMEOUT: máximo 9 segundos esperando a Google
+            # Cambiamos el tiempo de espera, pues al implementar el front aumenta significativamente el tiempo de respuesta
+            with urllib.request.urlopen(req, timeout=9) as r:
                 respuesta = json.loads(r.read())
             return json.loads(respuesta["candidates"][0]["content"]["parts"][0]["text"])
         

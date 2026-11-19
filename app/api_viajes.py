@@ -257,9 +257,9 @@ def preguntar_a_la_ia(instruccion: str) -> dict:
         )
         
         try:
-            # EL TIMEOUT: máximo 20 segundos esperando a Google
+            # EL TIMEOUT: máximo 9 segundos esperando a Google
             # Cambiamos el tiempo de espera, pues al implementar el front aumenta significativamente el tiempo de respuesta
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with urllib.request.urlopen(req, timeout=9) as r:
                 respuesta = json.loads(r.read())
             return json.loads(respuesta["candidates"][0]["content"]["parts"][0]["text"])
         

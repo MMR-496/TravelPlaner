@@ -36,7 +36,7 @@ ORIGENES = os.environ.get("CORS_ORIGENES", "http://127.0.0.1:5500,http://localho
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ORIGENES,                           # una lista, nunca ["*"]
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
     allow_headers=["Authorization", "Content-Type"],  # sin Authorization, el token no pasa la pregunta previa
 )
 

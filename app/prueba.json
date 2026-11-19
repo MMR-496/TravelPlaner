@@ -47,5 +47,6 @@
     "ruta": "/viajes/sugerencia",
     "cuerpo": {"destino": "Comala, Colima"},
     "token": "admin"
-  }
+  },
+  "cors": {"origen": "http://127.0.0.1:5500"}
 }

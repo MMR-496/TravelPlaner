@@ -38,10 +38,10 @@ El formato se basa en [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) y
 
 - Dejar de versionar `app/viajes.db` (la API la vuelve a crear sola) y agregarla a `.gitignore`.
 - Quitar los usuarios de prueba, que tienen claves conocidas, antes de cualquier uso real, y agregar una forma de registrar usuarios.
-- Quitar los espacios del valor por omisión de `CORS_ORIGENES` en `api_viajes.py`: con el espacio después de la coma, `http://localhost:5500` no queda permitido (hoy solo funciona la página abierta en `127.0.0.1:5500`).
 - Los viajes no tienen dueño: cualquier usuario con sesión ve todos. Decidir si cada quien debe ver solo los suyos.
 - Que la dirección de la API en la página (`http://127.0.0.1:8000`) se pueda configurar.
 - Cambiar SQLite por un servidor de base de datos si varias copias de la API corren al mismo tiempo.
+- Agregar pruebas unitarias con `pytest` para cubrir más casos borde.
 
 ### Historial de pull requests
 

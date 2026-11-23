@@ -132,8 +132,6 @@ Resultado de la versión v1.0.0: 28 de 28 pruebas pasadas
 
 ## Anatomía de mi API
 
-<!-- Peguen aquí lo que copia el botón "Copiar mi lista" del mapa interactivo. -->
-
 ```
 Anatomía de mi API · lista de revisión (43 de 43)
 
@@ -242,8 +240,8 @@ Si Travel Planer reservara vuelos u hoteles de verdad, podría necesitar un prov
 | Teresa Torres (`aTeresaTorres`) | [Completar] |
 | Elias (`Elias735`) | [Completar] |
 
-**Mayte:** Personalmente, lo más complicado fue la cuestión de la conexión con la IA, me costó bastante entender lo que estaba pasando y la configuración para que pudiera funcionar. Si esto fuera un proyecto para una empresa dedicaría más tiempo en la seguridad, si bien creo que cumplimos con lo básico, hay muchas posibilidades de ataques ciberneticos
+**Mayte Muñoz Rosales:** Personalmente, lo más complicado fue la cuestión de la conexión con la IA, me costó bastante entender lo que estaba pasando y la configuración para que pudiera funcionar. Si esto fuera un proyecto para una empresa dedicaría más tiempo en la seguridad, si bien creo que cumplimos con lo básico, hay muchas posibilidades de ataques ciberneticos
 
-**Teresa:** [COMPLETAR: ¿qué pieza le costó más y por qué? ¿Qué haría distinto si este proyecto fuera de una empresa?]
+**Ana Teresa Torres Barajas:** Lo que más me costó fue entender cómo funcionaba el flujo de CORS y el manejo de errores con timeout de la IA. Si este proyecto fuera de una empresa, usaría un gestor de secretos en la nube en lugar de variables de entorno locales, y probablemente implementaría pruebas unitarias con pytest desde el primer día.
 
 **Elías:** [COMPLETAR: ¿qué pieza le costó más y por qué? ¿Qué haría distinto si este proyecto fuera de una empresa?]

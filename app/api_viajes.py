@@ -22,6 +22,7 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal, Optional
+from dotenv import load_dotenv
 
 import bcrypt
 import jwt
@@ -32,6 +33,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, model_validator
 
+load_dotenv(override=True)
 app = FastAPI(title="API de Viajes", version="1.0")
 
 # ============================================================
@@ -39,7 +41,7 @@ app = FastAPI(title="API de Viajes", version="1.0")
 # ============================================================
 
 # CORS: qué páginas pueden usar la API desde el navegador (una lista, nunca "*")
-ORIGENES = os.environ.get("CORS_ORIGENES", "http://127.0.0.1:5500,http://localhost:5500").split(",")
+ORIGENES = os.environ.get("CORS_ORIGENES","http://127.0.0.1:5500,http://localhost:5500").split(",")
 
 app.add_middleware(
     CORSMiddleware,

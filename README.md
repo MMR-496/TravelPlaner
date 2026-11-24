@@ -238,10 +238,10 @@ Si Travel Planer reservara vuelos u hoteles de verdad, podría necesitar un prov
 |---|---|
 | Mayte Muñoz (`MMR-496`) | Proyecto base, modelos y alta de viajes; base de datos SQLite; login con JWT y roles; página web y CORS; ajustes finales de la API y endpoints restantes en la página. |
 | Teresa Torres (`aTeresaTorres`) | [Completar] |
-| Elias (`Elias735`) | [Completar] |
+| Elias (`Elias735`) | Apoyo en la implementación y pruebas de autenticación con JWT, roles y control de acceso y manejo de errores y pruebas |
 
 **Mayte Muñoz Rosales:** Personalmente, lo más complicado fue la cuestión de la conexión con la IA, me costó bastante entender lo que estaba pasando y la configuración para que pudiera funcionar. Si esto fuera un proyecto para una empresa dedicaría más tiempo en la seguridad, si bien creo que cumplimos con lo básico, hay muchas posibilidades de ataques ciberneticos
 
 **Ana Teresa Torres Barajas:** Lo que más me costó fue entender cómo funcionaba el flujo de CORS y el manejo de errores con timeout de la IA. Si este proyecto fuera de una empresa, usaría un gestor de secretos en la nube en lugar de variables de entorno locales, y probablemente implementaría pruebas unitarias con pytest desde el primer día.
 
-**Elías:** [COMPLETAR: ¿qué pieza le costó más y por qué? ¿Qué haría distinto si este proyecto fuera de una empresa?]
+**Elías:** Lo que más me costó fue comprender la autenticación con JWT y cómo controlar los permisos de cada usuario para evitar que pudiera acceder a información de otros. También fue complicado entender cómo manejar los errores cuando la IA no responde correctamente. Si este proyecto fuera para una empresa, dedicaría más tiempo a las pruebas automatizadas, la seguridad y la protección de los datos de los usuarios.

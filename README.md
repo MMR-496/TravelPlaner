@@ -237,7 +237,7 @@ Si Travel Planer reservara vuelos u hoteles de verdad, podría necesitar un prov
 | Integrante | Qué hizo |
 |---|---|
 | Mayte Muñoz (`MMR-496`) | Proyecto base, modelos y alta de viajes; base de datos SQLite; login con JWT y roles; página web y CORS; ajustes finales de la API y endpoints restantes en la página. |
-| Teresa Torres (`aTeresaTorres`) | [Completar] |
+| Teresa Torres (`aTeresaTorres`) | Validaciones de entrada para la creación y reemplazo de viajes; integración de IA para sugerencias de viaje mediante Gemini, incluyendo el desarrollo del simulador y las pruebas correspondientes. |
 | Elias (`Elias735`) | Apoyo en la implementación y pruebas de autenticación con JWT, roles y control de acceso y manejo de errores y pruebas |
 
 **Mayte Muñoz Rosales:** Personalmente, lo más complicado fue la cuestión de la conexión con la IA, me costó bastante entender lo que estaba pasando y la configuración para que pudiera funcionar. Si esto fuera un proyecto para una empresa dedicaría más tiempo en la seguridad, si bien creo que cumplimos con lo básico, hay muchas posibilidades de ataques ciberneticos
